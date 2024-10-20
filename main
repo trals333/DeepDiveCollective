@@ -1,0 +1,117 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import sqlite3
+from sqlalchemy import create_engine
+engine = create_engine('sqlite://', echo=False)
+
+cab_rides = pd.read_csv('cab_rides.csv')
+weather = pd.read_csv('weather.csv')
+
+cab_rides = cab_rides.drop_duplicates()
+weather = weather.drop_duplicates()
+
+cab_rides.to_sql("cab_rides", con =engine)
+
+df = '''
+select * from cab_rides where cab_type = 'Lyft'
+'''
+lyft_rides = pd.read_sql_query(df,con=engine)
+
+df = '''
+select * from cab_rides where cab_type = 'Uber'
+'''
+uber_rides = pd.read_sql_query(df,con=engine)
+
+uber_mean_price = uber_rides['price'].mean()
+print(uber_mean_price)
+
+uber_median_price = uber_rides['price'].median()
+print(uber_median_price)
+
+uber_std_price = uber_rides['price'].std()
+print(uber_std_price)
+
+uber_mean_distance = uber_rides['distance'].mean()
+print(uber_mean_distance)
+
+uber_median_distance = uber_rides['distance'].median()
+print(uber_median_distance)
+
+uber_std_distance = uber_rides['distance'].std()
+print(uber_mean_distance)
+
+lyft_mean_price = lyft_rides['price'].mean()
+print(lyft_mean_price)
+
+lyft_median_price = lyft_rides['price'].median()
+print(lyft_median_price)
+
+lyft_std_price = lyft_rides['price'].std()
+print(lyft_std_price)
+
+lyft_mean_distance = lyft_rides['distance'].mean()
+print(lyft_mean_distance)
+
+lyft_median_distance = lyft_rides['distance'].median()
+print(lyft_median_distance)
+
+lyft_std_distance = lyft_rides['distance'].std()
+print(lyft_std_distance)
+
+col1 = uber_rides['price']
+col2 = uber_rides['distance']
+plt.figure(figsize=(7,7))
+plt.hist(col1, bins=20, alpha = 0.5, label = 'price', color='blue', edgecolor='black')
+plt.title('Price compared to distance in uber rides')
+plt.xlabel('Price')
+plt.ylabel('Distance')
+plt.legend(loc='upper right')
+plt.show()
+
+col1 = lyft_rides['price']
+col2 = lyft_rides['distance']
+plt.figure(figsize=(7,7))
+plt.hist(col1, bins=20, alpha = 0.5, label = 'price', color='Pink', edgecolor='black')
+plt.title('Price compared to distance in Lyft rides')
+plt.xlabel('Price')
+plt.ylabel('Distance')
+plt.legend(loc='upper right')
+plt.show()
+
+plt.figure(figsize=(8, 6))
+plt.hist(uber_rides['price'].dropna(), bins=20, edgecolor='black')
+plt.title('Fair Occurence in Uber')
+plt.xlabel('Fair Price')
+plt.ylabel('Frequency')
+plt.show()
+
+cab_rides['date_time'] = pd.to_datetime(cab_rides['time_stamp'], unit='ms')
+cab_rides['date']= cab_rides['date_time'].dt.date
+cab_rides['day'] = cab_rides.date_time.dt.dayofweek
+cab_rides['hour'] = cab_rides.date_time.dt.hour
+
+cab_rides['fare_per_mile']= round(cab_rides.price/cab_rides.distance,2)
+
+weather['date_time'] = pd.to_datetime(weather['time_stamp'], unit='s')
+
+cab_rides['merge_date'] = cab_rides.source.astype(str) +" - "+ cab_rides.date_time.dt.date.astype("str") +" - "+ cab_rides.date_time.dt.hour.astype("str")
+weather['merge_date'] = weather.location.astype(str) +" - "+ weather.date_time.dt.date.astype("str") +" - "+ weather.date_time.dt.hour.astype("str")
+
+df_weather = weather.groupby(['merge_date'])
+columns_to_mean = ['temp', 'clouds', 'pressure', 'rain', 'humidity', 'wind']
+df_weather = df_weather[columns_to_mean].mean()
+df_weather.reset_index(inplace=True)
+
+cab_rides_weather_merged = pd.merge(cab_rides, df_weather, on='merge_date')
+cab_rides_weather_merged = cab_rides_weather_merged.drop(['id', 'product_id'], axis=1)
+print("Shape after merging both datasets", cab_rides_weather_merged.shape)
+
+import seaborn as sns
+
+plt.figure(figsize=(10, 6))
+sns.barplot(x='cab_type', y='price', hue='rain', data = cab_rides_weather_merged)
+plt.title('Impact of Rain on Pricing: Uber vs Lyft')
+plt.xlabel('Cab Type')
+plt.ylabel('Price ($)')
+plt.show()
