@@ -1,0 +1,324 @@
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+cab_rides_df = pd.read_csv('cab_rides.csv')
+weather_df = pd.read_csv('weather.csv')
+
+cab_rides_df = cab_rides_df.drop_duplicates()
+weather_df = weather_df.drop_duplicates()
+
+cab_rides_df = cab_rides_df.dropna(axis=0).reset_index(drop=True)
+weather_df = weather_df.fillna(0)
+
+avg_weather_df = weather_df.groupby('location').mean().reset_index(drop=False)
+avg_weather_df = avg_weather_df.drop('time_stamp', axis=1)
+
+source_weather_df = avg_weather_df.rename(
+    columns={
+        'location': 'source',
+        'temp': 'source_temp',
+        'clouds': 'source_clouds',
+        'pressure': 'source_pressure',
+        'rain': 'source_rain',
+        'humidity': 'source_humidity',
+        'wind': 'source_wind'
+    }
+)
+
+
+destination_weather_df = avg_weather_df.rename(
+    columns={
+        'location': 'destination',
+        'temp': 'destination_temp',
+        'clouds': 'destination_clouds',
+        'pressure': 'destination_pressure',
+        'rain': 'destination_rain',
+        'humidity': 'destination_humidity',
+        'wind': 'destination_wind'
+    }
+)
+
+merged_data = cab_rides_df\
+    .merge(source_weather_df, on='source')\
+    .merge(destination_weather_df, on='destination')
+
+merged_data.dropna(inplace=True)
+# merged_data = pd.read_csv('merged_data.csv')
+# Alternatively, just read a merged set that's been exported previously
+
+# Define the high-cost and low-cost labels
+price_threshold = merged_data['price'].median()
+merged_data['cost_category'] = merged_data['price'].apply(lambda x: 1 if x > price_threshold else 0)
+
+# Feature Engineering - Extract Day of Week and Hour from Timestamp
+merged_data['day_of_week'] = pd.to_datetime(merged_data['time_stamp']).dt.dayofweek
+merged_data['hour'] = pd.to_datetime(merged_data['time_stamp']).dt.hour
+
+# Choose features for prediction
+features = ['distance', 'surge_multiplier', 'source_temp', 'destination_temp', 'source_rain', 'destination_rain', 'day_of_week', 'hour']
+X = merged_data[features]
+y = merged_data['cost_category']
+
+# Standardize numerical features for better performance
+scaler = StandardScaler()
+X = scaler.fit_transform(X)
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+# Initialize and train the Decision Tree classifier
+clf = DecisionTreeClassifier(random_state=42)
+clf.fit(X_train, y_train)
+
+# Make predictions and evaluate the model
+y_pred = clf.predict(X_test)
+
+# Evaluation
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print(classification_report(y_test, y_pred))
+
+importances = clf.feature_importances_
+feature_names = features
+
+# Plot feature importance
+plt.figure(figsize=(10, 6))
+plt.barh(feature_names, importances, color='skyblue')
+plt.xlabel('Importance')
+plt.title('Feature Importance for High-Cost vs. Low-Cost Prediction')
+plt.show()
+
+def calculate_wsi(row, temp_min, temp_max, cloud_max, wind_max):
+    # Normalize temperature severity using min-max scaling
+    temp_severity = (row['source_temp'] - temp_min) / (temp_max - temp_min)
+    temp_severity = np.clip(temp_severity, 0, 1)  # Ensure values are between 0 and 1
+
+    # Normalize cloud cover severity
+    cloud_severity = row['source_clouds'] / cloud_max  # Assuming cloud cover max is 100
+    cloud_severity = np.clip(cloud_severity, 0, 1)
+
+    # Rain severity (binary)
+    rain_severity = 1 if row['source_rain'] > 0 else 0
+
+    # Normalize humidity severity
+    humidity_severity = row['source_humidity'] / 100  # Assuming humidity max is 100
+    humidity_severity = np.clip(humidity_severity, 0, 1)
+
+    # Normalize wind severity using min-max scaling
+    wind_severity = row['source_wind'] / wind_max  # Assuming typical max wind speed
+    wind_severity = np.clip(wind_severity, 0, 1)
+
+    # Calculate WSI as a weighted sum
+    WSI = (0.2 * temp_severity +
+           0.15 * cloud_severity +
+           0.3 * rain_severity +
+           0.15 * humidity_severity +
+           0.2 * wind_severity)
+    
+    return WSI
+
+    # Determine the min and max values for each feature
+temp_min, temp_max = merged_data['source_temp'].min(), merged_data['source_temp'].max()
+cloud_max = merged_data['source_clouds'].max()
+wind_max = merged_data['source_wind'].max()
+
+# Apply the WSI function with these parameters
+merged_data['WSI'] = merged_data.apply(lambda row: calculate_wsi(row, temp_min, temp_max, cloud_max, wind_max), axis=1)
+
+# Display the DataFrame with the new WSI column
+print(merged_data[['source_temp', 'source_clouds', 'source_rain', 'source_humidity', 'source_wind', 'WSI']])
+
+# Calculate the average price (or count) for each cab type across WSI levels
+# For simplicity, round WSI to 1 decimal to group by similar severity levels
+merged_data['WSI'] = merged_data['WSI'].round(1)
+
+# Group by WSI and cab_type, calculate mean price
+wsi_avg = merged_data.groupby(['WSI', 'cab_type']).price.mean().reset_index()
+
+# Plotting the data
+plt.figure(figsize=(12, 6))
+sns.lineplot(data=wsi_avg, x='WSI', y='price', hue='cab_type', marker="o")
+
+# Add labels and title
+plt.title("Average Ride Price for Uber and Lyft by Weather Severity Index (WSI)")
+plt.xlabel("Weather Severity Index (WSI)")
+plt.ylabel("Average Price")
+plt.legend(title='Cab Type')
+plt.grid()
+
+# Show the plot
+plt.show()
+
+
+# Example data (replace this with loading your actual dataset)
+data = {
+    'distance': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+}
+
+# Define distance bins and labels
+bins = [0, 3, 6, float('inf')]  # float('inf') represents infinity for the last bin
+labels = ['Short', 'Medium', 'Long']
+
+# Create a new column for distance bins
+merged_data['distance_bin'] = pd.cut(merged_data['distance'], bins=bins, labels=labels, right=False)
+
+# Display the DataFrame with the new distance bin column
+merged_data['distance_bin']
+
+# Count the number of rides in each category for Uber and Lyft
+category_counts = merged_data.groupby(['cab_type', 'distance_bin']).size().reset_index(name='count')
+
+# Create a bar plot
+plt.figure(figsize=(10, 6))
+sns.barplot(data=category_counts, x='distance_bin', y='count', hue='cab_type')
+
+# Customize the plot
+plt.title('Ride Count by Distance Category for Uber and Lyft')
+plt.xlabel('Distance Category')
+plt.ylabel('Number of Rides')
+plt.legend(title='Cab Type')
+plt.xticks(rotation=0)
+plt.tight_layout()
+
+# Show the plot
+plt.show()
+
+# Create new columns for uber_price and lyft_price
+merged_data['uber_price'] = merged_data['price'].where(merged_data['cab_type'] == 'Uber', 0)
+merged_data['lyft_price'] = merged_data['price'].where(merged_data['cab_type'] == 'Lyft', 0)
+
+# Display the DataFrame with the new price columns
+print(merged_data[['distance', 'cab_type', 'price', 'uber_price', 'lyft_price']])
+
+# Create a binary target variable for significant price difference
+threshold = 0.5  # Define a threshold for significant price difference
+merged_data['price_difference'] = (merged_data['uber_price'] - merged_data['lyft_price']).abs()
+merged_data['significant_difference'] = np.where(merged_data['price_difference'] > threshold * merged_data[['uber_price', 'lyft_price']].max(axis=1), 1, 0)
+
+# Select features for the model
+features = ['source_humidity', 'destination_humidity', 'source_rain', 'source_temp', 'destination_temp', 'WSI']
+X = pd.get_dummies(merged_data[features], drop_first=True)  # Convert categorical variable to dummy variables
+y = merged_data['significant_difference']
+
+# Split the data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.99, random_state=77)
+
+# Initialize the decision tree classifier
+clf = DecisionTreeClassifier(max_depth=2, random_state=99)
+
+# Fit the model
+clf.fit(X_train, y_train)
+
+# Make predictions
+y_pred = clf.predict(X_test)
+
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Confusion matrix
+conf_matrix = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', xticklabels=['False', 'True'], yticklabels=['False', 'True'])
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.title('Confusion Matrix')
+plt.show()
+
+# Classification report
+print(classification_report(y_test, y_pred))
+
+from sklearn.tree import plot_tree
+
+plt.figure(figsize=(20, 10))
+plot_tree(clf, filled=True, feature_names=X.columns, class_names=['No Significant Difference', 'Significant Difference'], rounded=True)
+plt.title('Decision Tree Visualization')
+plt.show()
+
+# Define a threshold for price categorization (e.g., median price)
+price_threshold = merged_data['price'].median()
+
+# Create a binary target variable for significant price
+merged_data['high_price'] = np.where(merged_data['price'] > price_threshold, 1, 0)  # 1 for high price, 0 for low price
+
+# Check the new target variable
+print(merged_data[['price', 'high_price']].head())
+
+# Select features for the model
+features = ['distance']
+X = merged_data[features]
+y = merged_data['high_price']
+
+# Split the data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Initialize the decision tree classifier
+clf = DecisionTreeClassifier(max_depth=5, random_state=42)
+
+# Fit the model
+clf.fit(X_train, y_train)
+
+# Make predictions
+y_pred = clf.predict(X_test)
+
+# Confusion matrix
+conf_matrix = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', xticklabels=['Low Price', 'High Price'], yticklabels=['Low Price', 'High Price'])
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.title('Confusion Matrix')
+plt.show()
+
+# Classification report
+print(classification_report(y_test, y_pred))
+
+from sklearn.tree import plot_tree
+
+plt.figure(figsize=(20, 10))
+plot_tree(clf, filled=True, feature_names=features, class_names=['Low Price', 'High Price'], rounded=True)
+plt.title('Decision Tree Visualization for Price Impact')
+plt.show()
+
+# Calculate average prices for Uber and Lyft
+average_prices = merged_data[['uber_price', 'lyft_price']].mean()
+
+# Convert to DataFrame for easier plotting
+average_prices_df = pd.DataFrame(average_prices).reset_index()
+average_prices_df.columns = ['Service', 'Average Price']
+
+# Display the average prices
+print(average_prices_df)
+
+# Sort the data by time_stamp
+merged_data = merged_data.sort_values('distance')
+
+# Display the first few rows to check the sorting
+print(merged_data[['distance', 'uber_price', 'lyft_price']].head())
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Set the aesthetic style of the plots
+sns.set(style="whitegrid")
+
+# Create a line plot
+plt.figure(figsize=(12, 12))
+plt.plot(merged_data['distance'], merged_data['uber_price'], label='Uber Prices', color='blue', linewidth=2)
+plt.plot(merged_data['distance'], merged_data['lyft_price'], label='Lyft Prices', color='orange', linewidth=2)
+
+# Add titles and labels
+plt.title('Tracking Uber Prices vs. Lyft Prices Over Distance')
+plt.xlabel('Distance')
+plt.ylabel('Price')
+plt.xticks(rotation=45)  # Rotate x-axis labels for better readability
+plt.legend()
+plt.tight_layout()  # Adjust layout to make room for labels
+
+# Show the plot
+plt.show()
